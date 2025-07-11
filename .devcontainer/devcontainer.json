@@ -1,6 +1,11 @@
 {
   "name": "Python & Node.js Environment",
-  "image": "mcr.microsoft.com/devcontainers/python:3.11-node",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
 
-  "forwardPorts": [8000, 5173]
+  // Adicionando a "feature" do Node.js
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts" // Instala a versão LTS (Long-Term Support), que é a recomendada
+    }
+  }
 }

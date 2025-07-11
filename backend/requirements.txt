@@ -4,3 +4,4 @@ python-dotenv
 google-generativeai
 SQLAlchemy
 asyncpg
+pydantic[email]

@@ -1,7 +1,8 @@
+# backend/main.py
 import os
 import json
 import google.generativeai as genai
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from dotenv import load_dotenv
@@ -87,3 +88,53 @@ async def get_all_interactions(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(models.Interaction).order_by(models.Interaction.created_at.desc()))
     interactions = result.scalars().all()
     return interactions
+
+# --- NOVO ENDPOINT DE CONSULTA INTELIGENTE ---
+
+@app.post("/api/v1/query")
+async def query_product_stock(request_body: schemas.QueryRequest, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select, or_
+
+    if not model:
+        raise HTTPException(status_code=500, detail="API do Gemini não configurada.")
+
+    user_question = request_body.question
+
+    # 1. Primeiro, pedimos ao Gemini para extrair o nome ou código do produto da pergunta.
+    identifier_prompt = f"""
+    Da pergunta do usuário a seguir, extraia apenas o nome, código ou referência principal do produto.
+    Retorne SOMENTE o identificador do produto, sem nenhuma palavra extra.
+    Pergunta: "{user_question}"
+    """
+    identifier_response = model.generate_content(identifier_prompt)
+    product_identifier = identifier_response.text.strip()
+
+    # 2. Agora, buscamos no banco de dados por esse identificador.
+    # O 'ilike' faz uma busca insensível a maiúsculas/minúsculas.
+    query = select(models.Product).where(
+        models.Product.product_deleted == False, # Garante que não vamos buscar produtos deletados
+        or_(
+            models.Product.product_code.ilike(f'%{product_identifier}%'),
+            models.Product.product_description.ilike(f'%{product_identifier}%'),
+            models.Product.product_reference.ilike(f'%{product_identifier}%')
+        )
+    )
+    result = await db.execute(query)
+    product = result.scalars().first()
+
+    # 3. Se não encontrarmos o produto, avisamos.
+    if not product:
+        return {"answer": f"Desculpe, não consegui encontrar um produto correspondente a '{product_identifier}' em nosso sistema."}
+
+    # 4. Se encontramos, pedimos ao Gemini para formular uma resposta amigável.
+    answer_prompt = f"""
+    Você é um assistente de vendas da TDS Autopeças.
+    O cliente perguntou sobre o estoque de um produto. Use as informações abaixo para responder.
+    - Nome do Produto: {product.product_description}
+    - Estoque Atual: {product.product_balance} unidades
+
+    Formule uma resposta clara, direta e amigável em português para o cliente.
+    """
+    final_answer_response = model.generate_content(answer_prompt)
+
+    return {"answer": final_answer_response.text}

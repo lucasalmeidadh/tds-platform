@@ -1,188 +1,201 @@
 # backend/main.py
 import os
 import json
+import httpx
 import google.generativeai as genai
+import unicodedata  # <--- ADICIONADO para remover acentos
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, or_, and_  # <--- ADICIONADO 'and_' para a busca
 from dotenv import load_dotenv
 
-# Importações locais dos nossos arquivos
-from . import models, schemas
+# Importações locais
+from . import models
 from .database import SessionLocal, create_db_and_tables
 
-# Carrega as variáveis de ambiente (do arquivo .env na raiz)
 load_dotenv()
 
-# --- Configuração do Gemini ---
-try:
-    genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    print("API do Gemini configurada com sucesso.")
-except Exception as e:
-    print(f"ERRO: Não foi possível configurar a API do Gemini. Verifique sua GOOGLE_API_KEY. Erro: {e}")
-    model = None
+# --- Configurações ---
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+model = genai.GenerativeModel('gemini-1.5-flash')
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
 
-# --- Configuração da API FastAPI ---
 app = FastAPI(title="TDS Platform API")
-
-# Middleware para permitir que o frontend acesse a API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Permite todas as origens
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Evento de inicialização: cria a tabela no banco quando a API sobe
+# --- Funções de Ciclo de Vida e Dependências ---
+
 @app.on_event("startup")
 async def on_startup():
+    """Cria as tabelas do banco de dados ao iniciar a aplicação."""
     await create_db_and_tables()
-    print("Banco de dados conectado e tabelas criadas (se não existiam).")
+    print("Banco de dados conectado e tabelas criadas.")
 
-# Dependência para obter uma sessão do banco de dados
 async def get_db():
-    async with SessionLocal() as db:
-        yield db
-
-# --- Endpoints da API ---
-
-@app.get("/")
-def read_root():
-    return {"status": "API da TDS Platform no ar!", "database_connection": "OK"}
-
-@app.post("/api/v1/analyze", response_model=schemas.InteractionResponse)
-async def analyze_text(request_body: schemas.TextToAnalyze, db: AsyncSession = Depends(get_db)):
-    if not model:
-        raise HTTPException(status_code=500, detail="API do Gemini não configurada.")
-    
-    text_to_analyze = request_body.text
-    prompt = f"""
-    Aja como um especialista em análise de feedback de clientes.
-    Analise o seguinte texto e retorne APENAS um JSON válido com a estrutura:
-    {{"sentimento": "Positivo | Neutro | Negativo", "resumo": "Um resumo curto do feedback em uma frase.", "sugestao_de_resposta": "Uma sugestão de resposta profissional e empática para o cliente."}}
-
-    Texto para analisar: "{text_to_analyze}"
     """
-    
-    response = model.generate_content(prompt)
-    clean_response_text = response.text.strip().replace('```json', '').replace('```', '')
-    analysis_data = json.loads(clean_response_text)
-    
-    new_interaction = models.Interaction(
-        original_text=text_to_analyze,
-        sentiment=analysis_data.get("sentimento"),
-        summary=analysis_data.get("resumo"),
-        suggested_response=analysis_data.get("sugestao_de_resposta")
-    )
-    
-    db.add(new_interaction)
-    await db.commit()
-    await db.refresh(new_interaction)
-    return new_interaction
+    Dependência do FastAPI para gerenciar a sessão do banco de dados.
+    Abre uma sessão, executa a lógica da rota, faz commit ou rollback, e fecha a sessão.
+    """
+    db = SessionLocal()
+    try:
+        yield db
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
 
-@app.get("/api/v1/interactions", response_model=list[schemas.InteractionResponse])
-async def get_all_interactions(db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import select
-    result = await db.execute(select(models.Interaction).order_by(models.Interaction.created_at.desc()))
-    interactions = result.scalars().all()
-    return interactions
+# --- Funções Auxiliares ---
 
-# --- NOVO ENDPOINT DE CONSULTA INTELIGENTE ---
+def remove_accents(input_str: str) -> str:
+    """Normaliza uma string, removendo acentos e convertendo para minúsculas."""
+    if not isinstance(input_str, str):
+        return ""
+    nfkd_form = unicodedata.normalize('NFKD', input_str)
+    only_ascii = nfkd_form.encode('ASCII', 'ignore')
+    return only_ascii.decode('ASCII').lower()
 
-@app.post("/api/v1/query")
-async def query_product_stock(request_body: schemas.QueryRequest, db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import select, or_
+async def send_whatsapp_message(to: str, message: str):
+    """Envia uma mensagem de texto para um número via API do WhatsApp."""
+    url = f"https://graph.facebook.com/v20.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "text": {"body": message},
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, headers=headers, json=data)
+            response.raise_for_status()  # Lança exceção para erros 4xx/5xx
+            print(f"Mensagem enviada com sucesso para {to}")
+        except httpx.HTTPStatusError as e:
+            print(f"Falha ao enviar mensagem: {e.response.status_code}")
+            print(f"Resposta da API: {e.response.json()}")
+        except Exception as e:
+            print(f"Um erro inesperado ocorreu ao enviar a mensagem: {e}")
 
-    if not model:
-        raise HTTPException(status_code=500, detail="API do Gemini não configurada.")
+# --- Lógica Principal de Resposta ---
 
-    user_question = request_body.question
-
-    # 1. Primeiro, pedimos ao Gemini para extrair o nome ou código do produto da pergunta.
+async def get_product_info_and_respond(user_question: str, db: AsyncSession):
+    """
+    Lógica completa para processar a pergunta do usuário, buscar no banco e formular uma resposta.
+    """
+    # 1. Extrai o identificador do produto da pergunta usando o Gemini
     identifier_prompt = f"""
     Da pergunta do usuário a seguir, extraia apenas o nome, código ou referência principal do produto.
-    Retorne SOMENTE o identificador do produto, sem nenhuma palavra extra.
+    Se a pergunta for um cumprimento ou não contiver um produto claro, retorne exatamente a string "N/A".
+    Retorne SOMENTE o identificador do produto ou "N/A".
     Pergunta: "{user_question}"
     """
     identifier_response = model.generate_content(identifier_prompt)
     product_identifier = identifier_response.text.strip()
 
-    # 2. Agora, buscamos no banco de dados por esse identificador.
-    # O 'ilike' faz uma busca insensível a maiúsculas/minúsculas.
-    query = select(models.Product).where(
-        models.Product.product_deleted == False, # Garante que não vamos buscar produtos deletados
-        or_(
-            models.Product.product_code.ilike(f'%{product_identifier}%'),
-            models.Product.product_description.ilike(f'%{product_identifier}%'),
-            models.Product.product_reference.ilike(f'%{product_identifier}%')
+    # Se for um cumprimento ou não houver produto, responde de forma genérica
+    if product_identifier == "N/A":
+        final_answer = "Olá! Sou o assistente virtual da TDS Autopeças. Como posso te ajudar a encontrar as peças ou serviços que você precisa?"
+    else:
+        # 2. Lógica de Busca Inteligente no Banco de Dados
+        search_terms = remove_accents(product_identifier).split()
+        conditions = []
+        for term in search_terms:
+            conditions.append(
+                or_(
+                    models.Product.product_code.ilike(f'%{term}%'),
+                    models.Product.product_description.ilike(f'%{term}%'),
+                    models.Product.product_reference.ilike(f'%{term}%')
+                )
+            )
+        
+        query = select(models.Product).where(
+            models.Product.product_deleted == False,
+            and_(*conditions)
         )
-    )
-    result = await db.execute(query)
-    product = result.scalars().first()
+        
+        result = await db.execute(query)
+        product = result.scalars().first()
 
-    # 3. Se não encontrarmos o produto, avisamos.
-    if not product:
-        return {"answer": f"Desculpe, não consegui encontrar um produto correspondente a '{product_identifier}' em nosso sistema."}
+        # 3. Formula a resposta final com base no resultado da busca
+        if not product:
+            final_answer = f"Desculpe, não consegui encontrar um produto correspondente a '{product_identifier}' em nosso sistema."
+        else:
+            answer_prompt = f"""
+            Você é um assistente de vendas da TDS Autopeças. O cliente perguntou sobre um produto.
+            Use as informações abaixo para responder de forma clara e amigável.
+            - Nome do Produto: {product.product_description}
+            - Preço Atual: R$ {product.product_price}
+            - Estoque Atual: {product.product_balance} unidades
+            """
+            final_answer_response = model.generate_content(answer_prompt)
+            final_answer = final_answer_response.text
 
-    # 4. Se encontramos, pedimos ao Gemini para formular uma resposta amigável.
-    answer_prompt = f"""
-    Você é um assistente de vendas da TDS Autopeças.
-    O cliente perguntou sobre dados de um produto. Use as informações abaixo para responder.
-    - Nome do Produto: {product.product_description}
-    - Preço atual: {product.product_price}
-
-    Formule uma resposta clara, direta e amigável em português para o cliente.
-    """
-    final_answer_response = model.generate_content(answer_prompt)
-    final_answer = final_answer_response.text
-
-    # Agora, salvamos a pergunta e a resposta no nosso histórico
-    new_query_interaction = models.Interaction(
+    # 4. Salva a interação no banco de dados
+    # O `db.commit()` foi removido daqui, pois a dependência `get_db` já cuida disso.
+    new_interaction = models.Interaction(
         original_text=user_question,
-        sentiment="Consulta de Produto", # Usamos um sentimento específico para este tipo de interação
-        summary=f"Busca por: '{product_identifier}'",
+        sentiment="Consulta de Produto" if product_identifier != "N/A" else "Saudação",
+        summary=f"Busca por: '{product_identifier}'" if product_identifier != "N/A" else "N/A",
         suggested_response=final_answer
     )
-    db.add(new_query_interaction)
-    await db.commit()
+    db.add(new_interaction)
+    
+    return final_answer
 
-    return {"answer": final_answer}
+# --- Endpoints da API ---
 
-# Este endpoint é usado apenas uma vez, para o WhatsApp verificar sua URL.
+@app.get("/")
+def read_root():
+    """Endpoint raiz para verificar se a API está no ar."""
+    return {"status": "API da TDS Platform no ar!", "database_connection": "OK"}
+
 @app.get("/api/v1/webhook")
-def verify_webhook(
-    request: Request,
-):
-    """
-    Verifica o token do webhook do WhatsApp.
-    """
-    verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN")
-
-    # O WhatsApp envia esses parâmetros na URL
+def verify_webhook(request: Request):
+    """Endpoint para verificação do Webhook do WhatsApp (GET)."""
     mode = request.query_params.get("hub.mode")
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
 
-    if mode == "subscribe" and token == verify_token:
+    if mode == "subscribe" and token == WHATSAPP_VERIFY_TOKEN:
         print("WEBHOOK VERIFICADO COM SUCESSO!")
         return int(challenge)
-
+    
+    print("FALHA NA VERIFICAÇÃO DO WEBHOOK. Tokens não correspondem.")
     raise HTTPException(status_code=403, detail="Falha na verificação do token.")
 
-
-# Este endpoint recebe as mensagens dos clientes
 @app.post("/api/v1/webhook")
-async def receive_message(request: Request):
-    """
-    Processa as mensagens recebidas do WhatsApp.
-    """
-    # Lê o corpo da requisição
+async def receive_message(request: Request, db: AsyncSession = Depends(get_db)):
+    """Endpoint que recebe as notificações de mensagens do WhatsApp (POST)."""
     body = await request.json()
-    print("MENSAGEM RECEBIDA DO WHATSAPP:")
-    print(json.dumps(body, indent=2)) # Imprime a mensagem formatada para depuração
+    print("Payload recebido do WhatsApp:")
+    print(json.dumps(body, indent=2))
 
-    # TODO: Adicionar a lógica para processar a mensagem com Gemini e salvar no banco
+    try:
+        # Extrai o corpo da mensagem e o ID do remetente
+        message = body['entry'][0]['changes'][0]['value']['messages'][0]
+        message_body = message['text']['body']
+        sender_id = message['from']
+        
+        # Chama a função principal para obter a resposta
+        response_text = await get_product_info_and_respond(message_body, db)
+
+        # Envia a resposta de volta para o usuário
+        await send_whatsapp_message(sender_id, response_text)
+
+    except (KeyError, IndexError) as e:
+        # Ignora notificações que não são mensagens de texto padrão
+        print(f"Notificação ignorada (não é uma mensagem de texto do usuário ou formato inesperado): {e}")
 
     return {"status": "ok"}

@@ -129,12 +129,23 @@ async def query_product_stock(request_body: schemas.QueryRequest, db: AsyncSessi
     # 4. Se encontramos, pedimos ao Gemini para formular uma resposta amigável.
     answer_prompt = f"""
     Você é um assistente de vendas da TDS Autopeças.
-    O cliente perguntou sobre o estoque de um produto. Use as informações abaixo para responder.
+    O cliente perguntou sobre dados de um produto. Use as informações abaixo para responder.
     - Nome do Produto: {product.product_description}
-    - Preço atual: {product.product_price} unidades
+    - Preço atual: {product.product_price}
 
     Formule uma resposta clara, direta e amigável em português para o cliente.
     """
     final_answer_response = model.generate_content(answer_prompt)
+    final_answer = final_answer_response.text
 
-    return {"answer": final_answer_response.text}
+    # Agora, salvamos a pergunta e a resposta no nosso histórico
+    new_query_interaction = models.Interaction(
+        original_text=user_question,
+        sentiment="Consulta de Produto", # Usamos um sentimento específico para este tipo de interação
+        summary=f"Busca por: '{product_identifier}'",
+        suggested_response=final_answer
+    )
+    db.add(new_query_interaction)
+    await db.commit()
+
+    return {"answer": final_answer}

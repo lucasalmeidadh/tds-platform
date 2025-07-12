@@ -2,7 +2,7 @@
 import os
 import json
 import google.generativeai as genai
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from dotenv import load_dotenv
@@ -149,3 +149,40 @@ async def query_product_stock(request_body: schemas.QueryRequest, db: AsyncSessi
     await db.commit()
 
     return {"answer": final_answer}
+
+# Este endpoint é usado apenas uma vez, para o WhatsApp verificar sua URL.
+@app.get("/api/v1/webhook")
+def verify_webhook(
+    request: Request,
+):
+    """
+    Verifica o token do webhook do WhatsApp.
+    """
+    verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN")
+
+    # O WhatsApp envia esses parâmetros na URL
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+
+    if mode == "subscribe" and token == verify_token:
+        print("WEBHOOK VERIFICADO COM SUCESSO!")
+        return int(challenge)
+
+    raise HTTPException(status_code=403, detail="Falha na verificação do token.")
+
+
+# Este endpoint recebe as mensagens dos clientes
+@app.post("/api/v1/webhook")
+async def receive_message(request: Request):
+    """
+    Processa as mensagens recebidas do WhatsApp.
+    """
+    # Lê o corpo da requisição
+    body = await request.json()
+    print("MENSAGEM RECEBIDA DO WHATSAPP:")
+    print(json.dumps(body, indent=2)) # Imprime a mensagem formatada para depuração
+
+    # TODO: Adicionar a lógica para processar a mensagem com Gemini e salvar no banco
+
+    return {"status": "ok"}

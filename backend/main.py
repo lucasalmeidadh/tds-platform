@@ -131,7 +131,7 @@ async def query_product_stock(request_body: schemas.QueryRequest, db: AsyncSessi
     Você é um assistente de vendas da TDS Autopeças.
     O cliente perguntou sobre o estoque de um produto. Use as informações abaixo para responder.
     - Nome do Produto: {product.product_description}
-    - Estoque Atual: {product.product_balance} unidades
+    - Preço atual: {product.product_price} unidades
 
     Formule uma resposta clara, direta e amigável em português para o cliente.
     """

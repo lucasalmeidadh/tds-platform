@@ -35,7 +35,7 @@ class Product(Base):
     product_brand = Column(String(100))
     product_section = Column(String(100))
     product_balance = Column(Integer, nullable=False, default=0)
-    product_cost = Column(Numeric(10, 2), nullable=False, default=0.00)
+    product_price = Column(Numeric(10, 2), nullable=False, default=0.00)
     product_averagecost = Column(Numeric(10, 2), nullable=False, default=0.00)
     product_deleted = Column(Boolean, nullable=False, default=False)
     product_createdat = Column(DateTime(timezone=True), server_default=func.now())

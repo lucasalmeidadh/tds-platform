@@ -161,9 +161,14 @@ def read_root():
     """Endpoint raiz para verificar se a API está no ar."""
     return {"status": "API da TDS Platform no ar!", "database_connection": "OK"}
 
+# Em backend/main.py
+
 @app.get("/api/v1/webhook")
 def verify_webhook(request: Request):
     """Endpoint para verificação do Webhook do WhatsApp (GET)."""
+    # LINHA DE DEPURAÇÃO ADICIONADA AQUI
+    print(f"TOKEN ESPERADO PELO CÓDIGO: '{WHATSAPP_VERIFY_TOKEN}'") 
+    
     mode = request.query_params.get("hub.mode")
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
@@ -173,6 +178,8 @@ def verify_webhook(request: Request):
         return int(challenge)
     
     print("FALHA NA VERIFICAÇÃO DO WEBHOOK. Tokens não correspondem.")
+    # Adicione um print para ver o token que a Meta está enviando
+    print(f"Token recebido da Meta: '{token}'") 
     raise HTTPException(status_code=403, detail="Falha na verificação do token.")
 
 @app.post("/api/v1/webhook")

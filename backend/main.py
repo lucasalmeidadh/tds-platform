@@ -9,6 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_  # <--- ADICIONADO 'and_' para a busca
 from dotenv import load_dotenv
+print("======================================================")
+print("--- INICIANDO TESTE DE CARREGAMENTO DE VARIÁVEIS ---")
+load_dotenv() # Garante que o .env seja lido
+token_carregado = os.getenv("WHATSAPP_ACCESS_TOKEN")
+print(f"O TOKEN SENDO USADO PELA APLICAÇÃO É: '{token_carregado}'")
+print("--- FIM DO TESTE DE CARREGAMENTO ---")
+print("======================================================")
 
 # Importações locais
 from . import models
